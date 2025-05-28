@@ -1,0 +1,9 @@
+moviepy
+whisper
+mediapipe
+opencv-python
+librosa
+numpy
+openai
+python-dotenv
+pyyaml
