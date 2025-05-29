@@ -5,4 +5,4 @@ Este projeto analisa aulas gravadas em vídeo, avaliando critérios como qualida
 ## Pré-requisitos
 - Python 3.8+
 - Dependências: `pip install -r requirements.txt`
-- Chave de API da OpenAI no arquivo `.env`:
+- Chave de API da GEMINI no arquivo `.env`:
