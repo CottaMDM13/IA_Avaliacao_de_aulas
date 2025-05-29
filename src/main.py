@@ -1,17 +1,26 @@
 import yaml
 import os
 import time
+import logging
 from src.utils.video_loader import load_and_extract_features
 from src.utils.transcriber import transcribe_audio
 from src.analysis.video import analyze_video, evaluate_video_quality
 from src.analysis.audio import extract_audio_features, evaluate_audio_quality
-from src.analysis.text import analyze_transcription
+from src.analysis.text import analyze_transcriptions
 from src.analysis.metrics import calculate_overall_score
 from src.utils.report import generate_final_report
 
+# Configurar logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 def load_config():
-    with open("config/settings.yaml", "r") as f:
-        return yaml.safe_load(f)
+    try:
+        with open("config/settings.yaml", "r") as f:
+            return yaml.safe_load(f)
+    except Exception as e:
+        logger.error(f"Erro ao carregar config/settings.yaml: {str(e)}")
+        raise
 
 def process_video(video_file, config):
     start_time = time.time()
@@ -20,39 +29,48 @@ def process_video(video_file, config):
     output_dir = config["paths"]["output_reports"]
 
     try:
+        logger.info(f"Iniciando processamento de: {video_file}")
+        
         # Extrair áudio e features de vídeo
+        logger.debug("Extraindo features do vídeo")
         video_features = load_and_extract_features(video_path, audio_path)
-        print(f"Vídeo processado: {video_file}", video_features)
+        logger.info(f"Vídeo processado: {video_file}, {video_features}")
 
         # Transcrever áudio
+        logger.debug("Transcrevendo áudio")
         transcription = transcribe_audio(audio_path, config["paths"]["output_transcripts"])
-        print(f"Transcrição salva: {transcription['txt_path']}")
+        logger.info(f"Transcrição salva: {transcription['txt_path']}")
 
         # Analisar vídeo
+        logger.debug("Analisando vídeo")
         video_metrics = analyze_video(video_path)
         video_results = evaluate_video_quality(video_metrics, config)
-        print(f"Análise de vídeo concluída: {video_results['overall_score']}")
+        logger.info(f"Análise de vídeo concluída: {video_results['overall_score']}")
 
         # Analisar áudio
+        logger.debug("Extraindo features de áudio")
         audio_features = extract_audio_features(audio_path)
         audio_results = evaluate_audio_quality(audio_features, config)
-        print(f"Análise de áudio concluída: {audio_results['quality_score']}")
+        logger.info(f"Análise de áudio concluída: {audio_results['quality_score']}")
 
-        # Analisar texto com Gemini
-        text_results = analyze_transcription(transcription["text"], video_results, audio_results, config)
-        print(f"Análise de texto concluída: {text_results['overall_score']}")
+        # Analisar texto
+        logger.debug("Analisando transcrição")
+        text_results = analyze_transcriptions([transcription["text"]], [video_results], [audio_results], config)[0]
+        logger.info(f"Análise de texto concluída: {text_results['overall_score']}")
 
         # Calcular score geral
+        logger.debug("Calculando métricas")
         metrics = calculate_overall_score(video_results, audio_results, text_results, config)
-        print(f"Score geral: {metrics['overall_score']} Aprovado: {metrics['approved']}")
+        logger.info(f"Score geral: {metrics['overall_score']} Aprovado: {metrics['approved']}")
 
         # Gerar relatório final
+        logger.debug("Gerando relatório final")
         report = generate_final_report(video_results, audio_results, text_results, metrics, output_dir, video_file)
-        print(f"Relatório final gerado: {report['json_path']}")
-        print(f"Tempo de processamento de {video_file}: {time.time() - start_time:.2f} segundos")
+        logger.info(f"Relatório final gerado: {report['json_path']}")
+        logger.info(f"Tempo de processamento de {video_file}: {time.time() - start_time:.2f} segundos")
 
     except Exception as e:
-        print(f"Erro ao processar {video_file}: {str(e)}")
+        logger.error(f"Erro ao processar {video_file}: {str(e)}")
         import traceback
         traceback.print_exc()
 
@@ -60,15 +78,14 @@ def main():
     config = load_config()
     video_dir = config["paths"]["input_videos"]
     
-    video_files = [f for f in os.listdir(video_dir) if f.endswith('.mp4')]
+    video_files = [f for f in os.listdir(video_dir) if f.lower().endswith('.mp4')]
     
     if not video_files:
-        print("Nenhum vídeo encontrado em", video_dir)
+        logger.warning(f"Nenhum vídeo encontrado em {video_dir}")
         return
     
-    print(f"Processando {len(video_files)} vídeo(s)...")
+    logger.info(f"Processando {len(video_files)} vídeo(s)...")
     for video_file in video_files:
-        print(f"\nIniciando processamento de: {video_file}")
         process_video(video_file, config)
 
 if __name__ == "__main__":
