@@ -2,119 +2,134 @@ import librosa
 import numpy as np
 import os
 import logging
-from datetime import datetime
+import google.generativeai as genai
+from dotenv import load_dotenv
+import json
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Cache do modelo Gemini
+_model = None
+
+def get_gemini_model():
+    global _model
+    if _model is None:
+        try:
+            load_dotenv()
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                logger.error("GEMINI_API_KEY não definida")
+                raise ValueError("GEMINI_API_KEY não definida.")
+            genai.configure(api_key=api_key)
+            _model = genai.GenerativeModel("gemini-1.5-flash")
+            logger.info("Modelo Gemini inicializado com sucesso")
+        except Exception as e:
+            logger.error(f"Erro ao inicializar modelo Gemini: {str(e)}")
+            raise
+    return _model
+
 def extract_audio_features(audio_path):
     try:
-        logger.debug(f"Extraindo features de áudio: {audio_path}")
-        y, sr = librosa.load(audio_path, sr=None)
+        logger.info(f"Extraindo features de áudio: {audio_path}")
+        y, sr = librosa.load(audio_path)
         duration = librosa.get_duration(y=y, sr=sr)
-        rms = librosa.feature.rms(y=y)[0]
-        pitches, magnitudes = librosa.piptrack(y=y, sr=sr)
-        pitch_values = pitches[magnitudes > np.median(magnitudes)]
-        intervals = librosa.effects.split(y, top_db=20)
-        silences = [(intervals[i][0] - intervals[i-1][1]) / sr for i in range(1, len(intervals))]
-        zcr = librosa.feature.zero_crossing_rate(y)[0]
-        spectral_centroid = librosa.feature.spectral_centroid(y=y, sr=sr)[0]
-        clipping_threshold = 0.99 * np.max(np.abs(y))
-        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
-        silence_segments = [y[intervals[i-1][1]:intervals[i][0]] for i in range(1, len(intervals))]
-        silence_rms = np.mean([np.sqrt(np.mean(seg**2)) for seg in silence_segments]) if silence_segments else 0
-
-        result = {
-            "duration_sec": float(duration),
-            "avg_rms": float(np.mean(rms)),
-            "std_rms": float(np.std(rms)),
-            "avg_pitch": float(np.mean(pitch_values)) if pitch_values.size > 0 else 0,
-            "std_pitch": float(np.std(pitch_values)) if pitch_values.size > 0 else 0,
-            "tempo_bpm": float(librosa.beat.beat_track(y=y, sr=sr)[0]),
-            "avg_silence_sec": float(np.mean(silences)) if silences else 0,
-            "avg_zcr": float(np.mean(zcr)),
-            "std_zcr": float(np.std(zcr)),
-            "avg_spectral_centroid": float(np.mean(spectral_centroid)),
-            "std_spectral_centroid": float(np.std(spectral_centroid)),
-            "clipping_count": int(np.sum(np.abs(y) >= clipping_threshold)),
-            "snr_estimated": float(np.mean(rms) / silence_rms) if silence_rms > 0 else float('inf'),
-            "mfcc_means": np.mean(mfcc, axis=1).tolist(),
-            "mfcc_stds": np.std(mfcc, axis=1).tolist(),
-            "audio_path": audio_path
+        rms = np.mean(librosa.feature.rms(y=y)[0])
+        spectral_centroid = np.mean(librosa.feature.spectral_centroid(y=y, sr=sr)[0])
+        silence_ratio = np.mean(np.abs(y) < 0.01)
+        pitch = np.mean(librosa.yin(y, fmin=65, fmax=2093))
+        clipping = np.mean(np.abs(y) > 0.98)
+        features = {
+            "duration": duration,
+            "rms": rms,
+            "spectral_centroid": spectral_centroid,
+            "silence_ratio": silence_ratio,
+            "pitch": pitch,
+            "clipping": clipping
         }
         logger.info(f"Features de áudio extraídas: {audio_path}")
-        return result
+        return features
     except Exception as e:
         logger.error(f"Erro ao extrair features de áudio {audio_path}: {str(e)}")
-        return {"error": f"Erro ao carregar áudio: {e}"}
+        raise
 
 def evaluate_audio_quality(features, config):
     try:
         logger.debug("Avaliando qualidade do áudio")
-        if "error" in features:
-            result = {"quality_score": 0, "comments": [{"score": 0, "comment": features["error"]}], "passed": False}
-            logger.warning(f"Erro na avaliação de áudio: {features['error']}")
-            return result
+        model = get_gemini_model()
+        comments = []
 
-        score, comments = 100, []
-        
-        # Duração
-        if features["duration_sec"] < 30:
-            comments.append({"score": 0.3, "comment": "Áudio muito curto, menos de 30 segundos."})
-            score -= 20
-        elif features["duration_sec"] < 60:
-            comments.append({"score": 0.6, "comment": "Áudio curto, menos de 1 minuto."})
-            score -= 10
-        else:
-            comments.append({"score": 0.9, "comment": "Duração adequada para análise."})
+        # Avaliar cada aspecto
+        duration = features.get("duration", 0)
+        duration_score = 1.0 if 300 <= duration <= 3600 else 0.5
+        comments.append({"score": duration_score})
 
-        # Clipping
-        if features["clipping_count"] > 200:
-            comments.append({"score": 0.2, "comment": f"Clipping excessivo ({features['clipping_count']} samples)."})
-            score -= 40
-        elif features["clipping_count"] > 100:
-            comments.append({"score": 0.5, "comment": f"Muitos picos de clipping ({features['clipping_count']} samples)."})
-            score -= 20
-        else:
-            comments.append({"score": 0.9, "comment": "Sem clipping significativo."})
+        clipping = features.get("clipping", 0)
+        clipping_score = 0.2 if clipping > 0.1 else 0.95
+        comments.append({"score": clipping_score})
 
-        # Silêncio
-        if features["avg_silence_sec"] > 7:
-            comments.append({"score": 0.3, "comment": f"Pausas muito longas (média {features['avg_silence_sec']:.2f}s)."})
-            score -= 20
-        elif features["avg_silence_sec"] > 5:
-            comments.append({"score": 0.5, "comment": f"Pausas longas frequentes (média {features['avg_silence_sec']:.2f}s)."})
-            score -= 10
-        else:
-            comments.append({"score": 0.9, "comment": "Pausas adequadas."})
+        silence_ratio = features.get("silence_ratio", 0)
+        silence_score = 0.95 if silence_ratio < 0.3 else 0.4
+        comments.append({"score": silence_score})
 
-        # Volume (RMS)
-        if features["avg_rms"] < 0.005:
-            comments.append({"score": 0.3, "comment": f"Volume muito baixo (RMS médio {features['avg_rms']:.4f})."})
-            score -= 20
-        elif features["avg_rms"] < 0.01:
-            comments.append({"score": 0.6, "comment": f"Volume baixo (RMS médio {features['avg_rms']:.4f})."})
-            score -= 10
-        else:
-            comments.append({"score": 0.9, "comment": "Volume adequado."})
+        rms = features.get("rms", 0)
+        volume_score = 0.95 if 0.01 < rms < 0.1 else 0.6
+        comments.append({"score": volume_score})
 
-        # Pitch
-        if features["std_pitch"] > 70:
-            comments.append({"score": 0.3, "comment": "Variação muito alta no pitch, voz instável."})
-            score -= 20
-        elif features["std_pitch"] > 50:
-            comments.append({"score": 0.5, "comment": "Variação alta no pitch, voz instável."})
-            score -= 10
-        elif features["std_pitch"] < 20:
-            comments.append({"score": 0.6, "comment": "Voz monótona, pouca variação no pitch."})
-            score -= 5
-        else:
-            comments.append({"score": 0.9, "comment": "Variação de pitch adequada."})
+        pitch = features.get("pitch", 0)
+        pitch_score = 0.95 if 100 < pitch < 300 else 0.6
+        comments.append({"score": pitch_score})
 
-        score = max(0, min(100, score))
-        comments.append({"score": score/100, "comment": "Áudio aprovado." if score >= config["thresholds"]["audio_score"] else "Áudio reprovado."})
-        result = {"quality_score": score, "comments": comments, "passed": score >= config["thresholds"]["audio_score"]}
+        # Gerar comentários via Gemini
+        prompt = (
+            "Com base nas métricas de áudio fornecidas, gere comentários e sugestões para cada aspecto (duração, clipping, silêncio, volume, pitch) "
+            "em um tom neutro e educacional. Retorne um JSON com 'comment' e 'suggestion' para cada aspecto. "
+            "Formato esperado: ["
+            "{\"comment\": \"string\", \"suggestion\": \"string\"}, "
+            "{\"comment\": \"string\", \"suggestion\": \"string\"}, "
+            "{\"comment\": \"string\", \"suggestion\": \"string\"}, "
+            "{\"comment\": \"string\", \"suggestion\": \"string\"}, "
+            "{\"comment\": \"string\", \"suggestion\": \"string\"}] "
+            "Métricas:\n"
+            f"Duração: {duration} segundos\n"
+            f"Clipping: {clipping}\n"
+            f"Silêncio: {silence_ratio}\n"
+            f"Volume (RMS): {rms}\n"
+            f"Pitch: {pitch} Hz\n"
+        )
+        try:
+            response = model.generate_content(prompt)
+            logger.debug(f"Resposta bruta do Gemini: {response.text}")
+            gemini_comments = json.loads(response.text.strip("```json\n").strip("\n```"))
+            logger.debug(f"Resposta parseada do Gemini: {gemini_comments}")
+            # Garantir que gemini_comments tenha 5 elementos
+            if not isinstance(gemini_comments, list) or len(gemini_comments) != 5:
+                logger.warning(f"Resposta do Gemini inválida, usando comentários padrão")
+                gemini_comments = [
+                    {"comment": "Não avaliado", "suggestion": "Verifique a conexão com a API Gemini"},
+                    {"comment": "Não avaliado", "suggestion": "Verifique a conexão com a API Gemini"},
+                    {"comment": "Não avaliado", "suggestion": "Verifique a conexão com a API Gemini"},
+                    {"comment": "Não avaliado", "suggestion": "Verifique a conexão com a API Gemini"},
+                    {"comment": "Não avaliado", "suggestion": "Verifique a conexão com a API Gemini"}
+                ]
+        except (json.JSONDecodeError, Exception) as e:
+            logger.error(f"Erro ao processar resposta do Gemini: {str(e)}")
+            gemini_comments = [
+                {"comment": "Não avaliado devido a erro na API", "suggestion": "Verifique a conexão com a API Gemini"},
+                {"comment": "Não avaliado devido a erro na API", "suggestion": "Verifique a conexão com a API Gemini"},
+                {"comment": "Não avaliado devido a erro na API", "suggestion": "Verifique a conexão com a API Gemini"},
+                {"comment": "Não avaliado devido a erro na API", "suggestion": "Verifique a conexão com a API Gemini"},
+                {"comment": "Não avaliado devido a erro na API", "suggestion": "Verifique a conexão com a API Gemini"}
+            ]
+
+        # Combinar scores com comentários do Gemini
+        for i, comment_data in enumerate(gemini_comments):
+            comments[i]["comment"] = comment_data.get("comment", "Não avaliado")
+            comments[i]["suggestion"] = comment_data.get("suggestion", "Verifique a conexão com a API Gemini")
+
+        quality_score = sum(c["score"] for c in comments) / len(comments) * 100
+        result = {"quality_score": round(quality_score, 2), "comments": comments}
         logger.info(f"Avaliação de áudio concluída: quality_score={result['quality_score']}")
         return result
     except Exception as e:

@@ -6,104 +6,97 @@ logger = logging.getLogger(__name__)
 
 def calculate_overall_score(video_results, audio_results, text_results, config):
     try:
-        weights = {"video": 0.3, "audio": 0.3, "text": 0.4}
-        overall_score = (
-            weights["video"] * video_results["overall_score"] +
-            weights["audio"] * audio_results["quality_score"] / 100 +
-            weights["text"] * text_results.get("overall_score", 0) / 10
+        logger.info("Calculando métricas gerais")
+        weights = {"video": 0.2, "audio": 0.3, "text_didactic": 0.5}  # Pesos fornecidos, soma = 1.0
+        
+        # Verificar métricas de vídeo
+        video_comments = video_results.get("comments", {})
+        video_score = video_results.get("overall_score", 0)
+        if not video_comments:
+            logger.warning("Nenhuma métrica de comentário encontrada em video_results")
+        
+        # Verificar métricas de áudio
+        audio_comments = audio_results.get("comments", [])
+        audio_score = audio_results.get("quality_score", 0)
+        if not audio_comments:
+            logger.warning("Nenhuma métrica de comentário encontrada em audio_results")
+        
+        # Calcular score médio de vídeo com verificação de existência
+        feedback = []
+        for aspect, key in [
+            ("Vídeo - Postura", "posture"),
+            ("Vídeo - Gestos", "gestures"),
+            ("Vídeo - Visibilidade do Rosto", "face_visibility"),
+            ("Vídeo - Contato Visual", "eye_contact"),
+        ]:
+            comment_data = video_comments.get(key, {})
+            score = comment_data.get("score", 0)
+            comment = comment_data.get("comment", "Não avaliado devido à ausência de dados")
+            suggestion = comment_data.get("suggestion", "Verifique se o vídeo foi processado corretamente.")
+            feedback.append({
+                "aspect": aspect,
+                "score": score,
+                "comment": comment,
+                "suggestion": suggestion
+            })
+
+        # Adicionar feedback para métricas de áudio
+        audio_aspects = ["Duração", "Clipping", "Silêncio", "Volume", "Pitch"]
+        for i, aspect_name in enumerate(audio_aspects):
+            comment_data = audio_comments[i] if i < len(audio_comments) else {}  # Verificar se índice é válido
+            score = comment_data.get("score", 0)
+            comment = comment_data.get("comment", f"{aspect_name} não avaliado devido a dados insuficientes")
+            suggestion = comment_data.get("suggestion", "Verifique se o áudio foi processado corretamente")
+            feedback.append({
+                "aspect": f"Áudio - {aspect_name}",
+                "score": score,
+                "comment": comment,
+                "suggestion": suggestion
+            })
+
+        # Adicionar feedback para texto didático
+        feedback.append({
+            "aspect": "Texto - Didática",
+            "score": text_results.get("didactic_score", 0) / 10,
+            "comment": text_results.get("didactic_justification", "N/A"),
+            "suggestion": (
+                "Estruture melhor o conteúdo com exemplos práticos e perguntas para engajar os alunos." if text_results.get("didactic_score", 0) / 10 < 0.9
+                else "Continue estruturando o conteúdo de forma clara e envolvente."
+            )
+        })
+
+        # Calcular média ponderada para texto geral
+        text_general_score = (
+            weights["video"] * video_score +
+            weights["audio"] * audio_score / 100 +
+            weights["text_didactic"] * text_results.get("didactic_score", 0) / 10
         )
-        feedback = [
-            {
-                "aspect": "Vídeo - Postura",
-                "score": video_results["comments"]["posture"]["score"],
-                "comment": video_results["comments"]["posture"]["comment"],
-                "suggestion": (
-                    "Mantenha os ombros alinhados e evite inclinações laterais." if video_results["comments"]["posture"]["score"] < 0.9
-                    else ""
-                )
-            },
-            {
-                "aspect": "Vídeo - Gestos",
-                "score": video_results["comments"]["gestures"]["score"],
-                "comment": video_results["comments"]["gestures"]["comment"],
-                "suggestion": (
-                    "Use gestos mais amplos e intencionais para enfatizar pontos-chave." if video_results["comments"]["gestures"]["score"] < 0.9
-                    else ""
-                )
-            },
-            {
-                "aspect": "Vídeo - Visibilidade do Rosto",
-                "score": video_results["comments"]["face_visibility"]["score"],
-                "comment": video_results["comments"]["face_visibility"]["comment"],
-                "suggestion": (
-                    "Ajuste a câmera para manter o rosto visível durante toda a aula." if video_results["comments"]["face_visibility"]["score"] < 0.9
-                    else ""
-                )
-            },
-            {
-                "aspect": "Vídeo - Contato Visual",
-                "score": video_results["comments"]["eye_contact"]["score"],
-                "comment": video_results["comments"]["eye_contact"]["comment"],
-                "suggestion": (
-                    "Olhe diretamente para a câmera para simular contato visual com os alunos." if video_results["comments"]["eye_contact"]["score"] < 0.9
-                    else ""
-                )
-            },
-            {
-                "aspect": "Áudio - Duração",
-                "score": audio_results["comments"][0]["score"],
-                "comment": audio_results["comments"][0]["comment"],
-                "suggestion": (
-                    "Estenda a duração da aula para cobrir o conteúdo de forma mais completa." if audio_results["comments"][0]["score"] < 0.9
-                    else ""
-                )
-            },
-            {
-                "aspect": "Áudio - Clipping",
-                "score": audio_results["comments"][1]["score"],
-                "comment": audio_results["comments"][1]["comment"],
-                "suggestion": (
-                    "Ajuste o ganho do microfone para evitar picos de clipping." if audio_results["comments"][1]["score"] < 0.9
-                    else ""
-                )
-            },
-            {
-                "aspect": "Áudio - Silêncio",
-                "score": audio_results["comments"][2]["score"],
-                "comment": audio_results["comments"][2]["comment"],
-                "suggestion": (
-                    "Reduza pausas longas, mantendo um ritmo fluido na fala." if audio_results["comments"][2]["score"] < 0.9
-                    else ""
-                )
-            },
-            {
-                "aspect": "Áudio - Volume",
-                "score": audio_results["comments"][3]["score"],
-                "comment": audio_results["comments"][3]["comment"],
-                "suggestion": (
-                    "Aumente o volume da voz ou aproxime-se do microfone." if audio_results["comments"][3]["score"] < 0.9
-                    else ""
-                )
-            },
-            {
-                "aspect": "Áudio - Pitch",
-                "score": audio_results["comments"][4]["score"],
-                "comment": audio_results["comments"][4]["comment"],
-                "suggestion": (
-                    "Varie o tom de voz para manter o engajamento, evitando monotonia ou instabilidade." if audio_results["comments"][4]["score"] < 0.9
-                    else ""
-                )
-            },
-            {
-                "aspect": "Texto - Didática e Engajamento",
-                "score": text_results.get("overall_score", 0)/10,
-                "comment": text_results.get("justification", "N/A"),
-                "suggestion": (
-                    "Estruture melhor o conteúdo com exemplos práticos e perguntas para engajar os alunos." if text_results.get("overall_score", 0)/10 < 0.9
-                    else ""
-                )
-            }
-        ]
+        # Agregar comentários para texto geral
+        video_summary = "Vídeo: " + ", ".join(
+            f"{k}: {v['comment']}" for k, v in video_comments.items() if v.get("comment")
+        ) if video_comments else "Vídeo: Não avaliado."
+        audio_summary = "Áudio: " + ", ".join(
+            f"{audio_aspects[i]}: {c.get('comment', 'N/A')}" for i, c in enumerate(audio_comments)
+        ) if audio_comments else "Áudio: Não avaliado."
+        didactic_summary = f"Didática: {text_results.get('didactic_justification', 'N/A')}"
+        general_comment = f"{video_summary} {audio_summary} {didactic_summary}"
+        general_suggestion = (
+            "Integre melhor os elementos de vídeo, áudio e didática para uma aula mais coesa." if text_general_score < 0.9
+            else "Continue integrando bem os elementos da aula."
+        )
+        feedback.append({
+            "aspect": "Texto - Avaliação Geral",
+            "score": round(text_general_score, 2),
+            "comment": general_comment,
+            "suggestion": general_suggestion
+        })
+
+        # Calcular score geral
+        overall_score = (
+            weights["video"] * video_score +
+            weights["audio"] * audio_score / 100 +
+            weights["text_didactic"] * text_results.get("didactic_score", 0) / 10
+        )
         result = {
             "overall_score": round(overall_score, 2),
             "approved": overall_score >= config["thresholds"]["overall_score"],

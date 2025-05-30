@@ -5,6 +5,7 @@ import time
 import sqlite3
 import logging
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from src.utils.video_loader import load_and_extract_features
 from src.utils.transcriber import transcribe_audio
 from src.analysis.video import analyze_video, evaluate_video_quality
@@ -14,8 +15,11 @@ from src.analysis.metrics import calculate_overall_score
 from src.utils.report import generate_final_report, generate_docx_report
 import yaml
 import mimetypes
+from werkzeug.exceptions import RequestEntityTooLarge
 
 app = Flask(__name__)
+# Configurar tamanho máximo de upload (100MB)
+app.config['MAX_CONTENT_LENGTH'] = 3000 * 1024 * 1024
 Bootstrap5(app)
 
 # Configurar logging
@@ -39,91 +43,92 @@ def index():
     if request.method == "POST":
         logger.info("Recebida requisição POST para upload de vídeos")
         
-        if 'videos' not in request.files or not request.files.getlist("videos"):
-            logger.error("Nenhum arquivo enviado")
-            return jsonify({"error": "Nenhum arquivo enviado."}), 400
-        
-        video_files = request.files.getlist("videos")
-        total_files = len(video_files)
-        session_id = str(time.time())
-        progress[session_id] = {"completed": 0, "total": total_files}
-        report_ids = []
-        
-        for i, video_file in enumerate(video_files):
-            logger.debug(f"Processando: {video_file.filename}")
+        try:
+            if 'videos' not in request.files or not request.files.getlist("videos"):
+                logger.error("Nenhum arquivo enviado")
+                return jsonify({"error": "Nenhum arquivo enviado."}), 400
             
-            if not video_file.filename:
-                logger.error("Arquivo sem nome detectado")
-                return jsonify({"error": "Um ou mais arquivos estão sem nome."}), 400
+            video_files = request.files.getlist("videos")
+            total_files = len(video_files)
+            session_id = str(time.time())
+            progress[session_id] = {"completed": 0, "total": total_files}
+            report_ids = []
             
-            if not video_file.filename.lower().endswith('.mp4'):
-                logger.error(f"Arquivo inválido: {video_file.filename}. Apenas .mp4 é aceito")
-                return jsonify({"error": f"Arquivo {video_file.filename} inválido. Apenas .mp4 é aceito."}), 400
-            
-            mime_type, _ = mimetypes.guess_type(video_file.filename)
-            if mime_type != 'video/mp4':
-                logger.error(f"Tipo MIME inválido para {video_file.filename}: {mime_type}")
-                return jsonify({"error": f"Arquivo {video_file.filename} não é um vídeo MP4 válido."}), 400
+            for i, video_file in enumerate(video_files):
+                logger.debug(f"Processando: {video_file.filename}")
+                
+                if not video_file.filename:
+                    logger.error("Arquivo sem nome detectado")
+                    return jsonify({"error": "Um ou mais arquivos estão sem nome."}), 400
+                
+                if not video_file.filename.lower().endswith('.mp4'):
+                    logger.error(f"Arquivo inválido: {video_file.filename}. Apenas .mp4 é aceito")
+                    return jsonify({"error": f"Arquivo {video_file.filename} inválido. Apenas .mp4 é aceito."}), 400
+                
+                mime_type, _ = mimetypes.guess_type(video_file.filename)
+                if mime_type != 'video/mp4':
+                    logger.error(f"Tipo MIME inválido para {video_file.filename}: {mime_type}")
+                    return jsonify({"error": f"Arquivo {video_file.filename} não é um vídeo MP4 válido."}), 400
 
-            video_path = f"{config['paths']['input_videos']}/{video_file.filename}"
-            audio_path = f"{config['paths']['input_audio']}/{video_file.filename.rsplit('.', 1)[0]}.wav"
-            output_dir = config["paths"]["output_reports"]
+                video_path = f"{config['paths']['input_videos']}/{video_file.filename}"
+                audio_path = f"{config['paths']['input_audio']}/{video_file.filename.rsplit('.', 1)[0]}.wav"
+                output_dir = config["paths"]["output_reports"]
 
-            try:
-                os.makedirs(config["paths"]["input_videos"], exist_ok=True)
-                os.makedirs(config["paths"]["input_audio"], exist_ok=True)
-                os.makedirs(output_dir, exist_ok=True)
-                
-                logger.debug(f"Salvando vídeo em: {video_path}")
-                video_file.save(video_path)
-                
-                start_time = time.time()
-                logger.debug("Extraindo features do vídeo")
-                video_features = load_and_extract_features(video_path, audio_path)
-                
-                logger.debug("Transcrevendo áudio")
-                transcription = transcribe_audio(audio_path, config["paths"]["output_transcripts"])
-                
-                logger.debug("Analisando vídeo")
-                video_metrics = analyze_video(video_path)
-                video_results = evaluate_video_quality(video_metrics, config)
-                
-                logger.debug("Extraindo features de áudio")
-                audio_features = extract_audio_features(audio_path)
-                audio_results = evaluate_audio_quality(audio_features, config)
-                
-                logger.debug("Analisando transcrição")
-                text_results = analyze_transcriptions([transcription["text"]], [video_results], [audio_results], config)[0]
-                
-                logger.debug("Calculando métricas")
-                metrics = calculate_overall_score(video_results, audio_results, text_results, config)
-                
-                logger.debug("Gerando relatório final")
-                report = generate_final_report(video_results, audio_results, text_results, metrics, output_dir, video_file.filename)
-                processing_time = time.time() - start_time
-                
-                logger.debug("Salvando ID do relatório")
-                conn = sqlite3.connect(f"{output_dir}/reports.db")
-                cursor = conn.cursor()
-                cursor.execute("SELECT id FROM reports WHERE video_name = ? AND timestamp = ?", 
-                             (video_file.filename, report['metrics']['timestamp']))
-                report_id = cursor.fetchone()
-                if report_id:
-                    report_ids.append(report_id[0])
-                else:
-                    logger.error(f"Relatório não encontrado para {video_file.filename}")
-                    raise ValueError("Falha ao recuperar ID do relatório")
-                conn.close()
-                
-                progress[session_id]["completed"] = i + 1
-                logger.debug(f"Progresso atualizado: {i+1}/{total_files}")
-                
-            except Exception as e:
-                logger.error(f"Erro ao processar {video_file.filename}: {str(e)}")
-                return jsonify({"error": f"Erro ao processar {video_file.filename}: {str(e)}"}), 500
+                try:
+                    os.makedirs(config["paths"]["input_videos"], exist_ok=True)
+                    os.makedirs(config["paths"]["input_audio"], exist_ok=True)
+                    os.makedirs(output_dir, exist_ok=True)
+                    
+                    logger.debug(f"Salvando vídeo em: {video_path}")
+                    video_file.save(video_path)
+                    
+                    start_time = time.time()
+                    with ThreadPoolExecutor(max_workers=3) as executor:
+                        future_video_features = executor.submit(load_and_extract_features, video_path, audio_path)
+                        future_transcription = executor.submit(transcribe_audio, audio_path, config["paths"]["output_transcripts"])
+                        future_video_metrics = executor.submit(analyze_video, video_path)
+                        
+                        video_features = future_video_features.result()
+                        transcription = future_transcription.result()
+                        video_metrics = future_video_metrics.result()
+                    
+                    video_results = evaluate_video_quality(video_metrics, config)
+                    audio_features = extract_audio_features(audio_path)
+                    audio_results = evaluate_audio_quality(audio_features, config)
+                    text_results = analyze_transcriptions([transcription["text"]], [video_results], [audio_results], config)[0]
+                    metrics = calculate_overall_score(video_results, audio_results, text_results, config)
+                    
+                    report = generate_final_report(video_results, audio_results, text_results, metrics, output_dir, video_file.filename)
+                    processing_time = time.time() - start_time
+                    
+                    conn = sqlite3.connect(f"{output_dir}/reports.db")
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT id FROM reports WHERE video_name = ? AND timestamp = ?", 
+                                 (video_file.filename, report['metrics']['timestamp']))
+                    report_id = cursor.fetchone()
+                    if report_id:
+                        report_ids.append(report_id[0])
+                    else:
+                        logger.error(f"Relatório não encontrado para {video_file.filename}")
+                        raise ValueError("Falha ao recuperar ID do relatório")
+                    conn.close()
+                    
+                    progress[session_id]["completed"] = i + 1
+                    logger.debug(f"Progresso atualizado: {i+1}/{total_files}")
+                    
+                except Exception as e:
+                    logger.error(f"Erro ao processar {video_file.filename}: {str(e)}")
+                    return jsonify({"error": f"Erro ao processar {video_file.filename}: {str(e)}"}), 500
+            
+            logger.info(f"Processamento concluído para {total_files} vídeos")
+            return jsonify({"redirect": url_for('reports'), "session_id": session_id})
         
-        logger.info(f"Processamento concluído para {total_files} vídeos")
-        return jsonify({"redirect": url_for('reports'), "session_id": session_id})
+        except RequestEntityTooLarge:
+            logger.error("Arquivo enviado excede o tamanho máximo permitido (100MB)")
+            return jsonify({"error": "O vídeo é muito grande. O tamanho máximo permitido é 100MB."}), 413
+        except Exception as e:
+            logger.error(f"Erro inesperado ao processar upload: {str(e)}")
+            return jsonify({"error": f"Erro inesperado: {str(e)}"}), 500
     
     return render_template("index.html")
 
@@ -153,14 +158,13 @@ def reports():
         raw_reports = cursor.fetchall()
         conn.close()
 
-        # Formatar timestamp
         reports = []
         for report in raw_reports:
             try:
                 timestamp = datetime.strptime(report[4], "%Y%m%d_%H%M%S")
                 formatted_timestamp = timestamp.strftime("%d/%m/%Y %H:%M:%S")
             except ValueError:
-                formatted_timestamp = report[4]  # Fallback se o formato for inválido
+                formatted_timestamp = report[4]
             reports.append({
                 "id": report[0],
                 "video_name": report[1],

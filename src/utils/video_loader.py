@@ -17,7 +17,7 @@ def load_and_extract_features(video_path, audio_output_path=None):
         }
         if audio_output_path and clip.audio:
             os.makedirs(os.path.dirname(audio_output_path), exist_ok=True)
-            clip.audio.write_audiofile(audio_output_path)
+            clip.audio.write_audiofile(audio_output_path, codec='pcm_s16le')  # Linha 18: Adicionado codec
             features["audio_path"] = audio_output_path
             logger.debug(f"Áudio extraído: {audio_output_path}")
         clip.close()
