@@ -26,7 +26,6 @@ def calculate_overall_score(video_results, audio_results, text_results, config):
         for aspect, key in [
             ("Vídeo - Postura", "posture"),
             ("Vídeo - Gestos", "gestures"),
-            ("Vídeo - Visibilidade do Rosto", "face_visibility"),
             ("Vídeo - Contato Visual", "eye_contact"),
         ]:
             comment_data = video_comments.get(key, {})

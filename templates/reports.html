@@ -4,46 +4,75 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Relatórios de Avaliação</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    {{ bootstrap.load_css() }}
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
     <style>
-        .container { margin-top: 50px; }
-        .card { margin-bottom: 20px; }
-        .card-header { background-color: #f8f9fa; }
-        .approved { color: green; font-weight: bold; }
-        .not-approved { color: red; font-weight: bold; }
+        body { font-family: 'Inter', sans-serif; background: #F3F4F6; color: #1F2937; }
+        .container { max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+        .card { background: #FFFFFF; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 1rem; transition: transform 0.2s; }
+        .card:hover { transform: translateY(-2px); }
+        .card-body { padding: 1rem; }
+        .status-approved { color: #10B981; font-weight: 600; }
+        .status-reproved { color: #EF4444; font-weight: 600; }
+        .btn-primary { background: #3B82F6; border: none; padding: 0.5rem 1rem; border-radius: 6px; font-weight: 600; transition: background 0.2s; }
+        .btn-primary:hover { background: #2563EB; }
+        .btn-secondary { background: #6B7280; border: none; padding: 0.5rem 1rem; border-radius: 6px; font-weight: 600; color: #FFFFFF; transition: background 0.2s; }
+        .btn-secondary:hover { background: #4B5563; }
+        .btn-danger { background: #EF4444; border: none; padding: 0.5rem 1rem; border-radius: 6px; font-weight: 600; color: #FFFFFF; transition: background 0.2s; }
+        .btn-danger:hover { background: #DC2626; }
+        h2 { font-size: 1.5rem; font-weight: 600; margin-bottom: 1.5rem; text-align: center; }
+        .alert { background: #FEF2F2; color: #991B1B; border-radius: 6px; padding: 1rem; text-align: center; }
+        .btn-group { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+        @media (max-width: 576px) { .card-body { padding: 0.75rem; } h2 { font-size: 1.25rem; } .btn-group { flex-direction: column; } .btn-group .btn { width: 100%; } }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1 class="text-center mb-4">Relatórios de Avaliação</h1>
-        <a href="{{ url_for('index') }}" class="btn btn-primary mb-4">Voltar ao Upload</a>
+        <h2>Relatórios de Avaliação</h2>
+        <a href="/" class="btn btn-secondary mb-3">Voltar ao Upload</a>
         {% if reports %}
-            <div class="row">
-                {% for report in reports %}
-                    <div class="col-md-6">
-                        <div class="card">
-                            <div class="card-header">
-                                <h5 class="card-title">{{ report.video_name }}</h5>
-                            </div>
-                            <div class="card-body">
-                                <p><strong>Score:</strong> {{ report.score*100|round(0) }}%</p>
-                                <p><strong>Status:</strong> 
-                                    <span class="{% if report.approved %}approved{% else %}not-approved{% endif %}">
-                                        {{ 'APROVADO' if report.approved else 'REPROVADO' }}
-                                    </span>
-                                </p>
-                                <p><strong>Data/Hora:</strong> {{ report.timestamp }}</p>
-                                <a href="{{ url_for('report', report_id=report.id) }}" class="btn btn-info">Ver Detalhes</a>
-                                <a href="{{ url_for('download', report_id=report.id) }}" class="btn btn-success">Baixar .docx</a>
-                            </div>
+            {% for report in reports %}
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">{{ report.video_name }}</h5>
+                        <p class="card-text">Score: {{ report.score*100|round(0) }}%</p>
+                        <p class="card-text">
+                            Status: <span class="{{ 'status-approved' if report.approved else 'status-reproved' }}">
+                                {{ 'APROVADO' if report.approved else 'REPROVADO' }}
+                            </span>
+                        </p>
+                        <p class="card-text">Data/Hora: {{ report.timestamp }}</p>
+                        <div class="btn-group">
+                            <a href="/report/{{ report.id }}" class="btn btn-primary">Ver Detalhes</a>
+                            <a href="/download/{{ report.id }}" class="btn btn-secondary">Baixar .docx</a>
+                            <a href="/delete/{{ report.id }}" class="btn btn-danger" onclick="return confirm('Tem certeza que deseja excluir este relatório?');" aria-label="Excluir relatório">Excluir</a>
                         </div>
                     </div>
-                {% endfor %}
-            </div>
+                </div>
+            {% endfor %}
         {% else %}
-            <div class="alert alert-info">Nenhum relatório encontrado.</div>
+            <div class="alert" role="alert">
+                Nenhum relatório encontrado.
+            </div>
         {% endif %}
     </div>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    {{ bootstrap.load_js() }}
+    <script>
+        function deleteReport(reportId) {
+            if (!confirm('Tem certeza que deseja excluir este relatório?')) return;
+                fetch(`/delete/${reportId}`, { method: 'GET' })
+                .then(response => response.json())
+                .then(data => {
+            if (data.error) {
+                alert(data.error);
+            } else {
+                window.location.reload();
+            }
+            })
+            .catch(error => {
+                alert('Erro ao excluir relatório: ' + error.message);
+            });
+        }
+    </script>
 </body>
 </html>
