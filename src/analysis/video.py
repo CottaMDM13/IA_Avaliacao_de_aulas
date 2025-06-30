@@ -4,10 +4,43 @@ import numpy as np
 import os
 import logging
 from datetime import datetime
+import google.generativeai as genai
+from dotenv import load_dotenv
+import json
+import requests
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Cache do modelo Gemini
+_model = None
+
+def get_gemini_model():
+    global _model
+    if _model is None:
+        try:
+            load_dotenv()
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                logger.error("GEMINI_API_KEY não definida")
+                raise ValueError("GEMINI_API_KEY não definida.")
+            genai.configure(api_key=api_key)
+            # Verificar conexão com a API
+            try:
+                response = requests.get("https://generativelanguage.googleapis.com/v1beta/models?key=" + api_key, timeout=5)
+                if response.status_code != 200:
+                    logger.error(f"Falha na conexão com a API Gemini: {response.text}")
+                    raise ValueError("Falha na conexão com a API Gemini")
+            except requests.RequestException as e:
+                logger.error(f"Erro de rede ao conectar com a API Gemini: {str(e)}")
+                raise
+            _model = genai.GenerativeModel("gemini-1.5-flash")
+            logger.info("Modelo Gemini inicializado com sucesso")
+        except Exception as e:
+            logger.error(f"Erro ao inicializar modelo Gemini: {str(e)}")
+            raise
+    return _model
 
 def analyze_video(video_path):
     try:
@@ -20,13 +53,18 @@ def analyze_video(video_path):
 
         posture_scores, movement_magnitudes, hand_movements = [], [], 0
         eye_positions, nose_positions, mouth_openness, brow_distances = [], [], [], []
-        frames_with_face, total_frames = 0, 0
+        total_frames = 0
         prev_left_wrist, prev_right_wrist = None, None
+        frame_count = 0
 
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret:
                 break
+            frame_count += 1
+            # Processar a cada 5 frames para otimizar
+            if frame_count % 5 != 0:
+                continue
             total_frames += 1
             image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
@@ -52,7 +90,6 @@ def analyze_video(video_path):
             # Análise de expressões faciais
             face_results = face_mesh.process(image_rgb)
             if face_results.multi_face_landmarks:
-                frames_with_face += 1
                 landmarks = face_results.multi_face_landmarks[0].landmark
                 eye_y = (landmarks[33].y + landmarks[263].y) / 2
                 eye_positions.append(eye_y)
@@ -75,7 +112,6 @@ def analyze_video(video_path):
             "total_frames": total_frames
         }
         facial_metrics = {
-            "face_visibility_ratio": round(frames_with_face / total_frames, 4) if total_frames else 0,
             "eye_position_stability": round(np.std(eye_positions), 4) if eye_positions else 0,
             "head_movement_index": round(np.std(nose_positions), 4) if nose_positions else 0,
             "expression_variance": round(np.std(mouth_openness + brow_distances), 4) if mouth_openness and brow_distances else 0
@@ -91,48 +127,100 @@ def analyze_video(video_path):
 def evaluate_video_quality(metrics, config):
     try:
         logger.debug("Avaliando qualidade do vídeo")
+        model = get_gemini_model()
         comments = {}
+
+        # Calcular escores mantendo a lógica existente
         posture_score = metrics["gestures"]["avg_posture_score"]
         if posture_score > 0.9:
-            comments["posture"] = {"score": 0.95, "comment": "Postura excelente, muito estável."}
+            score = 0.95
         elif posture_score > 0.85:
-            comments["posture"] = {"score": 0.85, "comment": "Postura boa e constante."}
+            score = 0.85
         elif posture_score > 0.7:
-            comments["posture"] = {"score": 0.7, "comment": "Postura aceitável, mas com leves desvios."}
+            score = 0.7
         elif posture_score > 0.5:
-            comments["posture"] = {"score": 0.5, "comment": "Postura irregular, precisa de ajustes."}
+            score = 0.5
         else:
-            comments["posture"] = {"score": 0.3, "comment": "Postura inadequada, compromete a apresentação."}
+            score = 0.3
+        comments["posture"] = {"score": score}
 
         hand_movement = metrics["gestures"]["avg_hand_movement"]
         if hand_movement > 0.015:
-            comments["gestures"] = {"score": 0.95, "comment": "Gestos expressivos, enriquecem a aula."}
+            score = 0.95
         elif hand_movement > 0.01:
-            comments["gestures"] = {"score": 0.85, "comment": "Boa utilização de gestos."}
+            score = 0.85
         elif hand_movement > 0.005:
-            comments["gestures"] = {"score": 0.6, "comment": "Gestos moderados, podem ser mais dinâmicos."}
+            score = 0.6
         elif hand_movement > 0.002:
-            comments["gestures"] = {"score": 0.4, "comment": "Pouca movimentação das mãos."}
+            score = 0.4
         else:
-            comments["gestures"] = {"score": 0.2, "comment": "Quase nenhum gesto, aula estática."}
-
-        face_visibility = metrics["facial_expressions"]["face_visibility_ratio"]
-        if face_visibility > config["thresholds"]["face_visibility"]:
-            comments["face_visibility"] = {"score": 0.9, "comment": "Rosto visível na maior parte do tempo."}
-        elif face_visibility > 0.6:
-            comments["face_visibility"] = {"score": 0.6, "comment": "Rosto visível em parte do tempo."}
-        else:
-            comments["face_visibility"] = {"score": 0.3, "comment": "Rosto pouco visível, dificulta engajamento."}
+            score = 0.2
+        comments["gestures"] = {"score": score}
 
         eye_stability = metrics["facial_expressions"]["eye_position_stability"]
         if eye_stability < 0.015:
-            comments["eye_contact"] = {"score": 0.95, "comment": "Excelente contato visual."}
+            score = 0.95
         elif eye_stability < 0.02:
-            comments["eye_contact"] = {"score": 0.85, "comment": "Bom contato visual."}
+            score = 0.85
         elif eye_stability < 0.03:
-            comments["eye_contact"] = {"score": 0.6, "comment": "Contato visual moderado."}
+            score = 0.6
         else:
-            comments["eye_contact"] = {"score": 0.3, "comment": "Contato visual insuficiente."}
+            score = 0.3
+        comments["eye_contact"] = {"score": score}
+
+        # Gerar comentários via Gemini com prompt ajustado
+        prompt = (
+            "Você é um especialista em análise de vídeo educacional. Com base nas métricas de vídeo fornecidas, gere comentários e sugestões para cada aspecto (postura, gestos, contato visual) "
+            "em um tom neutro, educacional e objetivo. Forneça um resumo narrativo (máx. 50 palavras) e uma sugestão de melhoria para cada aspecto. "
+            "Retorne um JSON estruturado com 'comment' e 'suggestion' para cada aspecto, mesmo que os valores sejam genéricos. "
+            "Formato esperado: "
+            "{\"posture\": {\"comment\": \"string\", \"suggestion\": \"string\"}, "
+            "\"gestures\": {\"comment\": \"string\", \"suggestion\": \"string\"}, "
+            "\"eye_contact\": {\"comment\": \"string\", \"suggestion\": \"string\"}} "
+            "Métricas fornecidas:\n"
+            f"Postura: avg_posture_score={metrics['gestures']['avg_posture_score']:.4f} (ideal: >0.9)\n"
+            f"Gestos: avg_hand_movement={metrics['gestures']['avg_hand_movement']:.4f}, total_hand_movements={metrics['gestures']['total_hand_movements']} (ideal: >0.015)\n"
+            f"Contato Visual: eye_position_stability={metrics['facial_expressions']['eye_position_stability']:.4f} (ideal: <0.015)\n"
+            "Exemplo: "
+            "{\"posture\": {\"comment\": \"Postura estável com alinhamento adequado.\", \"suggestion\": \"Mantenha a postura ereta.\"}, "
+            "\"gestures\": {\"comment\": \"Gestos expressivos reforçam a comunicação.\", \"suggestion\": \"Continue usando gestos naturais.\"}}"
+        )
+        try:
+            response = model.generate_content(prompt)
+            logger.debug(f"Resposta bruta do Gemini: {response.text}")
+            gemini_comments = json.loads(response.text.strip("```json\n").strip("\n```"))
+            logger.debug(f"Resposta parseada do Gemini: {gemini_comments}")
+            # Validar a estrutura da resposta
+            required_fields = ["posture", "gestures", "eye_contact"]
+            for field in required_fields:
+                if field not in gemini_comments or "comment" not in gemini_comments[field] or "suggestion" not in gemini_comments[field]:
+                    logger.warning(f"Campo {field} ausente ou inválido na resposta do Gemini")
+                    gemini_comments[field] = {
+                        "comment": f"{field} não avaliado devido a resposta inválida.",
+                        "suggestion": "Verifique os dados do vídeo."
+                    }
+        except (json.JSONDecodeError, Exception) as e:
+            logger.error(f"Erro ao processar resposta do Gemini: {str(e)}")
+            gemini_comments = {
+                "posture": {
+                    "comment": f"Postura com pontuação {posture_score:.4f} está {'excelente' if posture_score > 0.9 else 'adequada' if posture_score > 0.7 else 'abaixo do ideal'}.",
+                    "suggestion": "Mantenha uma postura ereta e equilibrada."
+                },
+                "gestures": {
+                    "comment": f"Gestos com movimento médio {hand_movement:.4f} {'são expressivos' if hand_movement > 0.015 else 'são moderados' if hand_movement > 0.005 else 'são limitados'}.",
+                    "suggestion": "Incorpore gestos naturais para reforçar a comunicação."
+                },
+                "eye_contact": {
+                    "comment": f"Estabilidade do contato visual {eye_stability:.4f} {'é excelente' if eye_stability < 0.015 else 'precisa de ajustes'}.",
+                    "suggestion": "Mantenha o olhar direcionado para a câmera."
+                }
+            }
+
+        # Atribuir comentários do Gemini
+        for aspect in ["posture", "gestures", "eye_contact"]:
+            comment_data = gemini_comments.get(aspect, {})
+            comments[aspect]["comment"] = comment_data.get("comment", f"{aspect} não avaliado.")
+            comments[aspect]["suggestion"] = comment_data.get("suggestion", "Verifique os dados do vídeo.")
 
         overall_score = sum(c["score"] for c in comments.values()) / len(comments)
         result = {"metrics": metrics, "comments": comments, "overall_score": round(overall_score, 2)}

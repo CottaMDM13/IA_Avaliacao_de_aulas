@@ -1,49 +1,53 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Relatórios de Avaliação</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>
-        .container { margin-top: 50px; }
-        .card { margin-bottom: 20px; }
-        .card-header { background-color: #f8f9fa; }
-        .approved { color: green; font-weight: bold; }
-        .not-approved { color: red; font-weight: bold; }
-    </style>
+    {{ bootstrap.load_css() }}
 </head>
 <body>
     <div class="container">
-        <h1 class="text-center mb-4">Relatórios de Avaliação</h1>
-        <a href="{{ url_for('index') }}" class="btn btn-primary mb-4">Voltar ao Upload</a>
+        <h1>Relatórios de Avaliação</h1>
+        <a href="{{ url_for('index') }}" class="btn btn-secondary mb-3">Voltar ao Upload</a>
         {% if reports %}
-            <div class="row">
-                {% for report in reports %}
-                    <div class="col-md-6">
-                        <div class="card">
-                            <div class="card-header">
-                                <h5 class="card-title">{{ report.video_name }}</h5>
-                            </div>
-                            <div class="card-body">
-                                <p><strong>Score:</strong> {{ report.score*100|round(0) }}%</p>
-                                <p><strong>Status:</strong> 
-                                    <span class="{% if report.approved %}approved{% else %}not-approved{% endif %}">
-                                        {{ 'APROVADO' if report.approved else 'REPROVADO' }}
-                                    </span>
-                                </p>
-                                <p><strong>Data/Hora:</strong> {{ report.timestamp }}</p>
-                                <a href="{{ url_for('report', report_id=report.id) }}" class="btn btn-info">Ver Detalhes</a>
-                                <a href="{{ url_for('download', report_id=report.id) }}" class="btn btn-success">Baixar .docx</a>
-                            </div>
-                        </div>
-                    </div>
-                {% endfor %}
-            </div>
+            <table class="table table-striped">
+                <thead>
+                    <tr>
+                        <th>Nome do Vídeo</th>
+                        <th>Score</th>
+                        <th>Status</th>
+                        <th>Data/Hora</th>
+                        <th>Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for report in reports %}
+                        <tr>
+                            <td>{{ report.video_name }}</td>
+                            <td>Score: {{ report.score*100|round(0) }}%</td>
+                            <td>
+                                Status: 
+                                <span class="{{ 'text-success' if report.approved else 'text-danger' }}">
+                                    {{ 'APROVADO' if report.approved else 'REPROVADO' }}
+                                </span>
+                            </td>
+                            <td>Data/Hora: {{ report.timestamp }}</td>
+                            <td>
+                                <a href="{{ url_for('report', report_id=report.id) }}" class="btn btn-primary btn-sm">Ver Detalhes</a>
+                                <a href="{{ url_for('download', report_id=report.id) }}" class="btn btn-success btn-sm">Baixar .docx</a>
+                                <a href="{{ url_for('delete_report', report_id=report.id) }}" class="btn btn-danger btn-sm" onclick="return confirm('Tem certeza que deseja excluir este relatório?')">Excluir</a>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
         {% else %}
-            <div class="alert alert-info">Nenhum relatório encontrado.</div>
+            <div class="alert alert-info" role="alert">
+                Nenhum relatório disponível no momento. Faça o upload de vídeos para gerar relatórios.
+            </div>
         {% endif %}
     </div>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    {{ bootstrap.load_js() }}
 </body>
 </html>

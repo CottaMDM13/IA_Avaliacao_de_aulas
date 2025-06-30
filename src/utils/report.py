@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 import logging
+import re
 from datetime import datetime
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
@@ -13,17 +14,31 @@ from docx.oxml.ns import qn
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+def clean_feedback_comment(comment):
+    """Remove parênteses e seus conteúdos do comentário."""
+    return re.sub(r'\([^)]+\)', '', comment).strip()
+
 def generate_final_report(video_results, audio_results, text_results, metrics, output_dir, video_name):
     try:
         logger.info(f"Gerando relatório para: {video_name}")
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Limpar parênteses dos comentários no feedback
+        cleaned_feedback = [
+            {
+                "aspect": fb["aspect"],
+                "comment": clean_feedback_comment(fb["comment"]),
+                "score": fb["score"],
+                "suggestion": fb["suggestion"]
+            }
+            for fb in metrics["feedback"]
+        ]
         report = {
             "video": video_results,
             "audio": audio_results,
             "text": text_results,
             "overall_score": metrics["overall_score"],
             "approved": metrics["approved"],
-            "feedback": metrics["feedback"],
+            "feedback": cleaned_feedback,
             "timestamp": timestamp,
             "video_name": video_name
         }
@@ -52,7 +67,7 @@ def generate_final_report(video_results, audio_results, text_results, metrics, o
         cursor.execute("""
             INSERT INTO reports (video_name, score, feedback, approved, timestamp)
             VALUES (?, ?, ?, ?, ?)
-        """, (video_name, metrics["overall_score"], json.dumps(metrics["feedback"]), metrics["approved"], timestamp))
+        """, (video_name, metrics["overall_score"], json.dumps(cleaned_feedback), metrics["approved"], timestamp))
         conn.commit()
         conn.close()
         
@@ -68,7 +83,7 @@ def generate_final_report(video_results, audio_results, text_results, metrics, o
             f.write("Resumo:\n")
             f.write(f"{text_results.get('review', 'Sem resumo disponível.')}\n\n")
             f.write("Feedback Técnico:\n")
-            for fb in metrics["feedback"]:
+            for fb in cleaned_feedback:
                 f.write(f"- {fb['aspect']}: {fb['comment']} (Nota: {fb['score']*100:.0f}%)\n")
                 if fb["suggestion"]:
                     f.write(f"  Sugestão: {fb['suggestion']}\n")
@@ -127,7 +142,7 @@ def generate_docx_report(video_name, metrics, output_dir):
             row_cells = table.add_row().cells
             row_cells[0].text = fb["aspect"]
             row_cells[1].text = f'{fb["score"]*100:.0f}'
-            row_cells[2].text = fb["comment"]
+            row_cells[2].text = clean_feedback_comment(fb["comment"])  # Limpar parênteses
             row_cells[3].text = fb["suggestion"] if fb["suggestion"] else 'Satisfatório, continue assim!'
             
             score = fb["score"]
