@@ -10,7 +10,7 @@ FFmpeg instalado (necessário para moviepy e whisper)
 Instalação
 
 Clone o repositório:
-git clone <URL_DO_REPOSITORIO>
+git clone https://github.com/CottaMDM13/IA_Avaliacao_de_aulas
 cd iapd
 
 
